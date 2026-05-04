@@ -9,9 +9,14 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.im-daniyalkhan.facedemo",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Face Demo needs access to your camera for biometric recognition."
+      }
     },
     "android": {
+      "permissions": ["android.permission.CAMERA"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,7 +24,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.im_daniyalkhan.facedemo"
     },
     "web": {
       "output": "static",
@@ -27,6 +33,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "react-native-vision-camera",
+        {
+          "enableFrameProcessors": true
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -38,11 +50,18 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "react-native-fast-tflite",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "assetBundlePatterns": [
+      "assets/models/blaze_face_short_range.tflite",
+      "assets/models/face_landmarker.task",
+      "assets/models/output_model.tflite"
+    ]
   }
 }
