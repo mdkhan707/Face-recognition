@@ -21,8 +21,15 @@ def get_embedding(image_path):
         if img is None:
             return {"error": "Could not read image file"}
         
-        # Standard MobileFaceNet Pre-processing
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # --- 🛡️ LIGHTING NORMALIZATION (CLAHE) ---
+        # Convert to LAB to isolate 'Lightness' and normalize shadows
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
+        limg = cv2.merge((cl, a, b))
+        img = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB) # Convert to RGB for AI model
+        
         img = cv2.resize(img, (112, 112))
 
         # Standard MobileFaceNet Pre-processing (-1 to 1)

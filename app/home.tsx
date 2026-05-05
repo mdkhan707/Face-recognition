@@ -23,7 +23,7 @@ import {
 import { useSharedValue, Worklets } from "react-native-worklets-core";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SERVER_URL = "http://192.168.4.56:3000"; 
+const SERVER_URL = "http://192.168.4.160:3000";
 const TARGET_BOX_SIZE = 280;
 const TARGET_BOX_X = (SCREEN_WIDTH - TARGET_BOX_SIZE) / 2;
 const TARGET_BOX_Y = (SCREEN_HEIGHT - TARGET_BOX_SIZE) / 2 - 50;
@@ -37,19 +37,21 @@ type ViewState = 'menu' | 'enrolling' | 'authenticating';
 export default function HomeScreen() {
   const camera = useRef<Camera>(null);
   const device = useCameraDevice("front");
-  
+
   const [hasPermission, setHasPermission] = useState(false);
   const [faces, setFaces] = useState<Face[]>([]);
+  const [isFaceInBox, setIsFaceInBox] = useState(false);
+  const [distanceStatus, setDistanceStatus] = useState<'ok' | 'far' | 'close'>('ok');
   const [authStatus, setAuthStatus] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   const [view, setView] = useState<ViewState>('menu');
   const [employeeName, setEmployeeName] = useState("");
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [showSnackbar, setShowSnackbar] = useState(false);
   const [snackbarType, setSnackbarType] = useState<'success' | 'error'>('success');
   const [canCapture, setCanCapture] = useState(false);
-  
+
   const [enrollStep, setEnrollStep] = useState<'front' | 'left' | 'right' | 'idle'>('idle');
   const [enrollImages, setEnrollImages] = useState<string[]>([]);
   const [uiProgress, setUiProgress] = useState(0);
@@ -57,8 +59,9 @@ export default function HomeScreen() {
   const lastPoseValid = useSharedValue(Date.now());
 
   // --- STABILITY LOCKS ---
-  // We use a Shared Value to lock the camera instantly so it doesn't take 2-3 photos at once.
   const isCapturing = useSharedValue(false);
+  const lastFaceX = useSharedValue(0);
+  const lastFaceY = useSharedValue(0);
 
   const faceDetector = useFaceDetector({
     performanceMode: "fast",
@@ -70,7 +73,7 @@ export default function HomeScreen() {
   // 3. Identification Workflow (Snapshot -> Server)
   const captureAndIdentify = async () => {
     if (isProcessing || !camera.current) return;
-    
+
     setIsProcessing(true);
     setAuthStatus("HOLD STEADY...");
 
@@ -115,7 +118,7 @@ export default function HomeScreen() {
           setIsCameraOpen(false);
           setEnrollStep('idle');
           setAuthStatus("UPLOADING ALL ANGLES...");
-          
+
           const formData = new FormData();
           formData.append('name', employeeName);
           newImages.forEach((path, idx) => {
@@ -219,8 +222,10 @@ export default function HomeScreen() {
     setUiProgress(val);
   });
 
-  const onFacesDetected = Worklets.createRunOnJS((detectedFaces: Face[]) => {
+  const onFacesDetected = Worklets.createRunOnJS((detectedFaces: Face[], inBox: boolean, dist: 'ok' | 'far' | 'close') => {
     setFaces(detectedFaces);
+    setIsFaceInBox(inBox);
+    setDistanceStatus(dist);
   });
 
   // 4. Real-time Frame Processing (Detection Only)
@@ -229,52 +234,77 @@ export default function HomeScreen() {
     runAsync(frame, () => {
       'worklet';
       const scannedFaces = faceDetector.detectFaces(frame);
-      onFacesDetected(scannedFaces);
+
+      // --- INITIAL BOX & DISTANCE CHECK ---
+      let currentFaceInBox = false;
+      let currentDist: 'ok' | 'far' | 'close' = 'ok';
+
+      if (scannedFaces.length > 0) {
+        const face = scannedFaces[0];
+        const { x, y, width: w, height: h } = face.bounds;
+
+        const centerX = x + w / 2;
+        const centerY = y + h / 2;
+        currentFaceInBox = centerX > TARGET_BOX_X && centerX < (TARGET_BOX_X + TARGET_BOX_SIZE) &&
+          centerY > TARGET_BOX_Y && centerY < (TARGET_BOX_Y + TARGET_BOX_SIZE);
+
+        const faceScale = w / TARGET_BOX_SIZE;
+        if (faceScale < 0.55) currentDist = 'far';
+        else if (faceScale > 0.85) currentDist = 'close';
+        else currentDist = 'ok';
+      }
+
+      onFacesDetected(scannedFaces, currentFaceInBox, currentDist);
 
       // 1. Check if we are already capturing (The "Digital Lock")
       if (isCapturing.value) return;
 
       // 2. Only trigger if a face is present and we are in a scanning view
       if (
-        scannedFaces.length > 0 && 
-        !isProcessing && 
+        scannedFaces.length > 0 &&
+        !isProcessing &&
         canCapture &&
-        view !== 'menu' && 
+        view !== 'menu' &&
         isCameraOpen
       ) {
         const face = scannedFaces[0];
-        
-        // --- POSE VALIDATION ---
-        let isPoseValid = false;
-        const faceX = face.bounds.x;
-        const faceY = face.bounds.y;
-        const faceW = face.bounds.width;
-        const faceH = face.bounds.height;
-        
-        // 1. Check if face center is inside target box (Required for both Enroll & Auth now)
+        const { x: faceX, y: faceY, width: faceW, height: faceH } = face.bounds;
+
+        // 🛡️ A) Stillness Check (Prevents Blur)
+        const movement = Math.abs(faceX - lastFaceX.value) + Math.abs(faceY - lastFaceY.value);
+        const isStill = movement < 10; // Threshold for "Stillness"
+        lastFaceX.value = faceX;
+        lastFaceY.value = faceY;
+
+        // 🛡️ B) Alignment Check (Looking Straight)
         const faceCenterX = faceX + faceW / 2;
         const faceCenterY = faceY + faceH / 2;
-        
         const isInBox = faceCenterX > TARGET_BOX_X && faceCenterX < (TARGET_BOX_X + TARGET_BOX_SIZE) &&
-                       faceCenterY > TARGET_BOX_Y && faceCenterY < (TARGET_BOX_Y + TARGET_BOX_SIZE);
+          faceCenterY > TARGET_BOX_Y && faceCenterY < (TARGET_BOX_Y + TARGET_BOX_SIZE);
 
+        let isAligned = false;
         if (view === 'enrolling') {
-          if (enrollStep === 'front') isPoseValid = Math.abs(face.yawAngle || 0) < 15; 
-          else isPoseValid = Math.abs(face.yawAngle || 0) > 10; 
-        } else if (view === 'authenticating') {
-          // Now requiring a straight look for login to ensure high quality
-          isPoseValid = Math.abs(face.yawAngle || 0) < 15; 
+          if (enrollStep === 'front') isAligned = Math.abs(face.yawAngle || 0) < 15;
+          else isAligned = Math.abs(face.yawAngle || 0) > 10;
+        } else {
+          isAligned = Math.abs(face.yawAngle || 0) < 15;
         }
 
-        if (isInBox && isPoseValid) {
+        // 🛡️ C) Distance Check (Scale)
+        const faceScale = faceW / TARGET_BOX_SIZE;
+        const isDistanceValid = faceScale > 0.55 && faceScale < 0.85;
+
+        // 🛡️ D) Final Security Gate
+        const isPoseValid = isInBox && isAligned && isStill && isDistanceValid;
+
+        if (isPoseValid) {
           const now = Date.now();
           const elapsed = now - lastPoseValid.value;
-          // Set both to 2500ms (2.5s) for maximum stability
-          const requiredTime = 2500;
-          
-          poseProgress.value = Math.min(elapsed / requiredTime, 1); 
+          const requiredTime = 2500; // 2.5s of perfect "Statue" pose
+
+          poseProgress.value = Math.min(elapsed / requiredTime, 1);
           updateUiProgress(poseProgress.value);
-          
+
           if (poseProgress.value >= 1) {
             isCapturing.value = true;
             poseProgress.value = 0;
@@ -282,6 +312,7 @@ export default function HomeScreen() {
             triggerCapture();
           }
         } else {
+          // Reset timer if they move or look away
           lastPoseValid.value = Date.now();
           poseProgress.value = 0;
           updateUiProgress(0);
@@ -316,8 +347,8 @@ export default function HomeScreen() {
       )}
 
       <View style={styles.buttonGroup}>
-        <TouchableOpacity style={[styles.bigButton, { backgroundColor: '#007AFF', opacity: isProcessing ? 0.5 : 1 }]} disabled={isProcessing} onPress={() => { 
-          setView('authenticating'); 
+        <TouchableOpacity style={[styles.bigButton, { backgroundColor: '#007AFF', opacity: isProcessing ? 0.5 : 1 }]} disabled={isProcessing} onPress={() => {
+          setView('authenticating');
           setIsCameraOpen(true);
           setCanCapture(false);
           setAuthStatus("");
@@ -341,7 +372,7 @@ export default function HomeScreen() {
         <Text style={styles.inputLabel}>FULL NAME</Text>
         <TextInput style={styles.input} placeholder="e.g. Daniyal Khan" placeholderTextColor="#555" value={employeeName} onChangeText={setEmployeeName} autoFocus={true} editable={!isProcessing} />
       </View>
-      
+
       {isProcessing && (
         <View style={styles.processingStatus}>
           <ActivityIndicator color="#007AFF" />
@@ -355,12 +386,12 @@ export default function HomeScreen() {
         </Text>
       )}
 
-      <TouchableOpacity 
-        style={[styles.bigButton, { backgroundColor: '#007AFF', opacity: (employeeName && !isProcessing) ? 1 : 0.5, marginTop: 20 }]} 
-        disabled={!employeeName || isProcessing} 
-        onPress={() => { 
-          setIsCameraOpen(true); 
-          setAuthStatus(""); 
+      <TouchableOpacity
+        style={[styles.bigButton, { backgroundColor: '#007AFF', opacity: (employeeName && !isProcessing) ? 1 : 0.5, marginTop: 20 }]}
+        disabled={!employeeName || isProcessing}
+        onPress={() => {
+          setIsCameraOpen(true);
+          setAuthStatus("");
           setEnrollStep('front');
           setEnrollImages([]);
           lastPoseValid.value = Date.now();
@@ -396,9 +427,13 @@ export default function HomeScreen() {
 
           {/* TARGET BOX GUIDE */}
           <View style={[
-            styles.targetBox, 
-            { 
-              borderColor: uiProgress > 0 ? '#34C759' : (faces.length > 0 ? '#FFCC00' : 'rgba(255,255,255,0.4)') 
+            styles.targetBox,
+            {
+              borderColor: uiProgress > 0
+                ? '#34C759' // GREEN: All good!
+                : (faces.length > 0 && isFaceInBox)
+                  ? '#FF8800' // ORANGE: Inside box but moving/misaligned
+                  : '#FF3B30' // RED: No face OR outside box
             }
           ]}>
             {uiProgress > 0 && (
@@ -410,9 +445,16 @@ export default function HomeScreen() {
             <Text style={styles.phaseLabel}>
               {view === 'enrolling' ? `PHASE: ${enrollStep.toUpperCase()}` : 'AUTHENTICATING'}
             </Text>
-            {isProcessing && <ActivityIndicator color="#007AFF" style={{marginBottom: 10}} />}
+            {isProcessing && <ActivityIndicator color="#007AFF" style={{ marginBottom: 10 }} />}
             <Text style={[styles.statusText, { color: authStatus.includes("✅") ? "#00FF00" : "white" }]}>
-              {authStatus || (canCapture ? "FIT FACE IN BOX & HOLD STILL" : "READYING CAMERA...")}
+              {authStatus || (
+                !canCapture ? "READYING CAMERA..." :
+                  faces.length === 0 ? "LOOK AT CAMERA" :
+                    !isFaceInBox ? "CENTER YOUR FACE" :
+                      distanceStatus === 'far' ? "PLEASE MOVE CLOSER" :
+                        distanceStatus === 'close' ? "PLEASE MOVE BACK" :
+                          "HOLD STILL..."
+              )}
             </Text>
           </View>
         </>
@@ -437,7 +479,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 36, fontWeight: '900', color: 'white', letterSpacing: 4 },
   subtitle: { fontSize: 14, color: '#666', marginTop: 5, letterSpacing: 2, marginBottom: 60, textTransform: 'uppercase' },
   buttonGroup: { width: '100%', gap: 20 },
-  bigButton: { width: '100%', paddingVertical: 25, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 10 },
+  bigButton: { width: '100%', paddingVertical: 25, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
   bigButtonText: { color: 'white', fontSize: 20, fontWeight: '800', letterSpacing: 1 },
   buttonDesc: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 4 },
   formContainer: { flex: 1, justifyContent: 'center', padding: 40 },
@@ -458,7 +500,6 @@ const styles = StyleSheet.create({
   snackbar: { position: 'absolute', bottom: 40, left: 20, right: 20, backgroundColor: '#34C759', padding: 20, borderRadius: 15, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
   snackbarText: { color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   targetBox: { position: 'absolute', left: TARGET_BOX_X, top: TARGET_BOX_Y, width: TARGET_BOX_SIZE, height: TARGET_BOX_SIZE, borderWidth: 2, borderRadius: 30, backgroundColor: 'rgba(0,0,0,0.1)', justifyContent: 'flex-end' },
-  progressBar: { height: 8, backgroundColor: '#34C759', borderRadius: 4 },
+  progressBar: { position: 'absolute', bottom: -25, height: 8, backgroundColor: '#34C759', borderRadius: 4 },
   phaseLabel: { color: '#007AFF', fontWeight: 'bold', fontSize: 14, marginBottom: 5, letterSpacing: 2 }
 });
-
