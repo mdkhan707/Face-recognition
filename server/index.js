@@ -69,8 +69,14 @@ function startPythonAI() {
 
       try {
         const embedding = JSON.parse(output);
-        if (embedding.error) reject(new Error(embedding.error));
-        else resolve(embedding);
+        if (embedding.error) {
+          reject(new Error(embedding.error));
+        } else {
+          // 🛡️ Print the real Face DNA (128 numbers)
+          console.log(`🧬 [BIOMETRIC DNA] Generated 128-dim vector:`);
+          console.log(JSON.stringify(embedding)); 
+          resolve(embedding);
+        }
       } catch (e) {
         reject(new Error("AI output parse error"));
       }
@@ -167,7 +173,7 @@ app.post("/authenticate", upload.single("image"), async (req, res) => {
     // B) Search DB for closest match
     const query = `
       SELECT name, embedding <-> $1 as distance 
-      FROM emp 
+      FROM emp x
       ORDER BY distance ASC 
       LIMIT 1
     `;
@@ -178,7 +184,7 @@ app.post("/authenticate", upload.single("image"), async (req, res) => {
 
     if (result.rows.length > 0) {
       const match = result.rows[0];
-      const threshold = 0.63;
+      const threshold = 0.60;
 
       console.log(`🎯 [AUTH] Best match: ${match.name} (Distance: ${match.distance.toFixed(4)})`);
       console.log(`🔍 [AUTH] Attempt distance: ${match.distance.toFixed(4)}`);

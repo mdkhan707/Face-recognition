@@ -11,6 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.im-daniyalkhan.facedemo",
+      "deploymentTarget": "15.5",
       "infoPlist": {
         "NSCameraUsageDescription": "Face Demo needs access to your camera for biometric recognition."
       }

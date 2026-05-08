@@ -23,8 +23,8 @@ import {
 import { useSharedValue, Worklets } from "react-native-worklets-core";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SERVER_URL = "http://192.168.4.160:3000";
-const TARGET_BOX_SIZE = 280;
+const SERVER_URL = "http://192.168.4.69:3000";
+const TARGET_BOX_SIZE = 320;
 const TARGET_BOX_X = (SCREEN_WIDTH - TARGET_BOX_SIZE) / 2;
 const TARGET_BOX_Y = (SCREEN_HEIGHT - TARGET_BOX_SIZE) / 2 - 50;
 
@@ -249,8 +249,8 @@ export default function HomeScreen() {
           centerY > TARGET_BOX_Y && centerY < (TARGET_BOX_Y + TARGET_BOX_SIZE);
 
         const faceScale = w / TARGET_BOX_SIZE;
-        if (faceScale < 0.55) currentDist = 'far';
-        else if (faceScale > 0.85) currentDist = 'close';
+        if (faceScale < 0.45) currentDist = 'far';
+        else if (faceScale > 0.80) currentDist = 'close';
         else currentDist = 'ok';
       }
 
@@ -272,7 +272,7 @@ export default function HomeScreen() {
 
         // 🛡️ A) Stillness Check (Prevents Blur)
         const movement = Math.abs(faceX - lastFaceX.value) + Math.abs(faceY - lastFaceY.value);
-        const isStill = movement < 10; // Threshold for "Stillness"
+        const isStill = movement < 18; // Threshold for "Stillness" (More lenient)
         lastFaceX.value = faceX;
         lastFaceY.value = faceY;
 
@@ -292,7 +292,7 @@ export default function HomeScreen() {
 
         // 🛡️ C) Distance Check (Scale)
         const faceScale = faceW / TARGET_BOX_SIZE;
-        const isDistanceValid = faceScale > 0.55 && faceScale < 0.85;
+        const isDistanceValid = faceScale > 0.45 && faceScale < 0.80;
 
         // 🛡️ D) Final Security Gate
         const isPoseValid = isInBox && isAligned && isStill && isDistanceValid;
