@@ -262,7 +262,7 @@ app.post("/authenticate", upload.single("image"), async (req, res) => {
     }
 
     const vectorStr = `[${embedding.join(",")}]`;
-    const COSINE_THRESHOLD = 0.40; // Facenet512: same~0.10, diff~0.78, threshold midpoint
+    const COSINE_THRESHOLD = 0.28; // Facenet512: same~0.10, diff~0.78, threshold midpoint
 
     const query = `
       SELECT name, MIN(embedding <=> $1::vector) AS best_distance

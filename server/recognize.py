@@ -35,7 +35,7 @@ from deepface import DeepFace
 # ─────────────────────────────────────────────────────────────────────────────
 
 MODEL_NAME    = "Facenet512"
-DETECTOR      = "opencv"   # fast, reliable — swap to "retinaface" for max accuracy
+DETECTOR      = "retinaface"   # fast, reliable — swap to "retinaface" for max accuracy
 EMBEDDING_DIM = 512        # Facenet512 outputs 512-d vectors
 
 # ── DEBUG MODE ────────────────────────────────────────────────────────────────
@@ -70,29 +70,20 @@ def exif_rotate(image_path):
 
 
 def apply_clahe(img_bgr):
-    """
-    CLAHE (Contrast Limited Adaptive Histogram Equalization) on the L channel.
-    Improves faces in dark rooms, back-lit scenes, or uneven lighting.
-    Operates in LAB colour space so only luminance is changed — colours stay natural.
-    """
-    lab        = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-    l, a, b    = cv2.split(lab)
-    clahe      = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l_eq       = clahe.apply(l)
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))  # was 2.0
+    l_eq = clahe.apply(l)
     lab_merged = cv2.merge((l_eq, a, b))
     return cv2.cvtColor(lab_merged, cv2.COLOR_LAB2BGR)
 
 
 def sharpen(img_bgr):
-    """
-    Unsharp-mask style sharpening kernel.
-    Helps with blurry webcam frames or low-resolution mobile selfies.
-    """
     kernel = np.array([
-        [ 0, -1,  0],
-        [-1,  5, -1],
-        [ 0, -1,  0]
-    ], dtype=np.float32)
+        [ 0, -0.5,  0],
+        [-0.5,  3, -0.5],
+        [ 0, -0.5,  0]
+    ], dtype=np.float32)  # gentler than center=5
     return cv2.filter2D(img_bgr, -1, kernel)
 
 
@@ -170,6 +161,14 @@ def get_embedding(image_path):
             enforce_detection= False,
             align            = True,
         )
+        # After result = DeepFace.represent(...)
+        if result:
+            import time, os
+            os.makedirs("/tmp/facedebug", exist_ok=True)
+            ts = int(time.time() * 1000)
+            # Save the facial area DeepFace detected
+            facial_area = result[0].get("facial_area", {})
+            print(f"🔍 [DEEPFACE] Detected face region: {facial_area}", file=sys.stderr)
 
         if not result:
             return {"error": "No face detected"}
@@ -197,7 +196,6 @@ def get_embedding(image_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     print("READY", flush=True)
     for line in sys.stdin:

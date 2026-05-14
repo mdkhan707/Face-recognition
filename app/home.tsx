@@ -1,3 +1,4 @@
+import * as Haptics from "expo-haptics";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -33,7 +34,7 @@ const TARGET_BOX_Y = (SCREEN_HEIGHT - TARGET_BOX_SIZE) / 2 - 50;
 // Why different ranges per angle?
 //   • front / left / right: standard range — face stays roughly same size
 //   • up / down: when you tilt your head, your chin/forehead comes closer
-//     to the camera. The face bounding box gets larger even without moving
+//     to the camera. The face bounding bought x gets larger even without moving
 //     your body. So we allow a wider max scale for these two poses.
 //     If we kept 0.65 max, the user would have to step back while tilting
 //     which is unnatural and confusing.
@@ -111,6 +112,10 @@ export default function HomeScreen() {
   // ─── CAPTURE & IDENTIFY ───────────────────────────────────────────────────
   const captureAndIdentify = async () => {
     if (isProcessing || !camera.current) return;
+
+    // 📳 Buzz the tablet to confirm capture
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
     setIsProcessing(true);
     setAuthStatus("HOLD STEADY...");
 
@@ -405,7 +410,7 @@ export default function HomeScreen() {
 
       if (!isProcessing && canCapture && view !== 'menu' && isCameraOpen) {
         const elapsed = Date.now() - lastPoseValid.value;
-        const requiredTime = 2000; // 2.0s — slightly faster than before
+        const requiredTime = 1500; // 1.0s — slightly faster than before
 
         poseProgress.value = Math.min(elapsed / requiredTime, 1);
         updateUiProgress(poseProgress.value);
