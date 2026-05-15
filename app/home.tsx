@@ -1,4 +1,5 @@
 import * as Haptics from "expo-haptics";
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -7,10 +8,10 @@ import {
   Platform,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View
 } from "react-native";
+import Svg, { Defs, Ellipse, Mask, Rect } from 'react-native-svg';
 import {
   Camera,
   runAsync,
@@ -21,12 +22,25 @@ import {
   useFaceDetector
 } from "react-native-vision-camera-face-detector";
 import { useSharedValue, Worklets } from "react-native-worklets-core";
+import EnrollForm from '../components/EnrollForm';
+import MainMenu from '../components/MainMenu';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SERVER_URL = "http://192.168.4.132:3000";
+const SERVER_URL = "http://192.168.0.104:3000";
+
+
 const TARGET_BOX_SIZE = 320;
-const TARGET_BOX_X = (SCREEN_WIDTH - TARGET_BOX_SIZE) / 2;
-const TARGET_BOX_Y = (SCREEN_HEIGHT - TARGET_BOX_SIZE) / 2 - 50;
+const OVAL_RX = TARGET_BOX_SIZE / 2;
+const OVAL_RY = TARGET_BOX_SIZE * 0.65; // Makes it 30% taller than it is wide
+const OVAL_CX = SCREEN_WIDTH / 2;
+const OVAL_CY = (SCREEN_HEIGHT / 2) - 60; // Push oval slightly up
+
+const TARGET_BOX_X = OVAL_CX - OVAL_RX;
+const TARGET_BOX_Y = OVAL_CY - OVAL_RY;
+
+// Exact perimeter of an ellipse (Ramanujan's formula) for perfect progress bar matching
+const H_VAL = Math.pow(OVAL_RX - OVAL_RY, 2) / Math.pow(OVAL_RX + OVAL_RY, 2);
+const OVAL_PERIMETER = Math.PI * (OVAL_RX + OVAL_RY) * (1 + (3 * H_VAL) / (10 + Math.sqrt(4 - 3 * H_VAL)));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DISTANCE RANGES PER ANGLE
@@ -67,10 +81,10 @@ type EnrollStep = 'front' | 'left' | 'right' | 'up' | 'down' | 'idle';
 
 const phaseMessages: Record<string, string> = {
   front: 'STEP 1/5: LOOK STRAIGHT',
-  left: 'STEP 2/5: TURN LEFT',
-  right: 'STEP 3/5: TURN RIGHT',
-  up: 'STEP 4/5: TILT HEAD UP',
-  down: 'STEP 5/5: TILT HEAD DOWN',
+  left: 'STEP 2/5: LOOK SLIGHTLY RIGHT',
+  right: 'STEP 3/5: LOOK SLIGHTLY LEFT',
+  up: 'STEP 4/5: LOOK SLIGHTLY UP',
+  down: 'STEP 5/5: LOOK SLIGHTLY DOWN',
   idle: '',
 };
 
@@ -140,10 +154,10 @@ export default function HomeScreen() {
           isCapturing.value = false;
         };
 
-        if (enrollStep === 'front') { nextStep('front', 'GREAT! NOW TURN Right SLOWLY', 'left'); return; }
-        else if (enrollStep === 'left') { nextStep('left', 'EXCELLENT! TURN LEFT SLOWLY', 'right'); return; }
-        else if (enrollStep === 'right') { nextStep('right', 'GOOD! NOW TILT HEAD UP', 'up'); return; }
-        else if (enrollStep === 'up') { nextStep('up', 'ALMOST DONE! TILT HEAD DOWN', 'down'); return; }
+        if (enrollStep === 'front') { nextStep('front', 'GREAT! NOW LOOK SLIGHTLY RIGHT', 'left'); return; }
+        else if (enrollStep === 'left') { nextStep('left', 'EXCELLENT! NOW LOOK SLIGHTLY LEFT', 'right'); return; }
+        else if (enrollStep === 'right') { nextStep('right', 'GOOD! NOW LOOK SLIGHTLY UP', 'up'); return; }
+        else if (enrollStep === 'up') { nextStep('up', 'ALMOST DONE! LOOK SLIGHTLY DOWN', 'down'); return; }
         else if (enrollStep === 'down') {
           console.log("✅ [ENROLL] All 5 done. Uploading...");
           setIsCameraOpen(false);
@@ -168,12 +182,13 @@ export default function HomeScreen() {
           const data = await response.json();
 
           if (data.success) {
+            setIsProcessing(false);
             setAuthStatus(`ENROLLED SUCCESSFULLY! ✅`);
             setSnackbarType('success');
             setShowSnackbar(true);
             setTimeout(() => {
               setView('menu'); setEmployeeName(""); setAuthStatus("");
-              setIsProcessing(false); setShowSnackbar(false); isCapturing.value = false;
+              setShowSnackbar(false); isCapturing.value = false;
             }, 3000);
           } else {
             setAuthStatus("ENROLL FAILED ❌");
@@ -219,12 +234,13 @@ export default function HomeScreen() {
       const data = await response.json();
 
       if (data.success) {
+        setIsProcessing(false);
         setAuthStatus(`WELCOME: ${data.name} ✅`);
         setSnackbarType('success');
         setShowSnackbar(true);
         setTimeout(() => {
           setView('menu'); setEmployeeName(""); setAuthStatus("");
-          setIsProcessing(false); setIsCameraOpen(false);
+          setIsCameraOpen(false);
           setShowSnackbar(false); isCapturing.value = false;
         }, 3000);
       } else {
@@ -294,8 +310,7 @@ export default function HomeScreen() {
         const tooFarRight = faceRight > boxRight;
 
         if (tooFarLeft || tooFarRight) {
-          const msg = tooFarLeft ? 'MOVE FACE RIGHT' : 'MOVE FACE LEFT';
-          updateTraffic('red', msg);
+          updateTraffic('red', 'CENTER YOUR FACE IN THE OVAL');
           poseProgress.value = 0;
           updateUiProgress(0);
           lastPoseValid.value = Date.now();
@@ -332,7 +347,7 @@ export default function HomeScreen() {
         return;
       }
       if (faceScale > scaleMax) {
-        updateTraffic('orange', 'MOVE BACK');
+        updateTraffic('orange', 'MOVE BACK SLIGHTLY');
         poseProgress.value = 0;
         updateUiProgress(0);
         lastPoseValid.value = Date.now();
@@ -352,26 +367,26 @@ export default function HomeScreen() {
         } else if (enrollStep === 'left') {
           isAligned = yaw > 15 && yaw < 50;  // device: LEFT = POSITIVE yaw
           // Give specific guidance based on how far they've turned
-          if (yaw <= 15) angleMessage = 'TURN YOUR HEAD LEFT MORE';
-          else if (yaw >= 50) angleMessage = 'TOO FAR LEFT, COME BACK';
+          if (yaw <= 15) angleMessage = 'LOOK MORE TO YOUR LEFT';
+          else if (yaw >= 50) angleMessage = 'TOO FAR LEFT, LOOK BACK A BIT';
           else angleMessage = 'HOLD STILL...';
         } else if (enrollStep === 'right') {
           isAligned = yaw < -15 && yaw > -50;  // device: RIGHT = NEGATIVE yaw
-          if (yaw >= -15) angleMessage = 'TURN YOUR HEAD RIGHT MORE';
-          else if (yaw <= -50) angleMessage = 'TOO FAR RIGHT, COME BACK';
+          if (yaw >= -15) angleMessage = 'LOOK MORE TO YOUR RIGHT';
+          else if (yaw <= -50) angleMessage = 'TOO FAR RIGHT, LOOK BACK A BIT';
           else angleMessage = 'HOLD STILL...';
         } else if (enrollStep === 'up') {
           // Android inverted: looking UP = POSITIVE pitch
           isAligned = pitch > 15 && pitch < 35 && Math.abs(yaw) < 20;
-          if (pitch <= 15) angleMessage = 'TILT HEAD UP MORE';
-          else if (pitch >= 35) angleMessage = 'TOO FAR UP, COME BACK';
+          if (pitch <= 15) angleMessage = 'LOOK UP A BIT MORE';
+          else if (pitch >= 35) angleMessage = 'TOO FAR UP, LOOK BACK A BIT';
           else if (Math.abs(yaw) >= 20) angleMessage = 'FACE THE CAMERA MORE';
           else angleMessage = 'HOLD STILL...';
         } else if (enrollStep === 'down') {
           // Android inverted: looking DOWN = NEGATIVE pitch
           isAligned = pitch < -15 && pitch > -35 && Math.abs(yaw) < 20;
-          if (pitch >= -15) angleMessage = 'TILT HEAD DOWN MORE';
-          else if (pitch <= -35) angleMessage = 'TOO FAR DOWN, COME BACK';
+          if (pitch >= -15) angleMessage = 'LOOK DOWN A BIT MORE';
+          else if (pitch <= -35) angleMessage = 'TOO FAR DOWN, LOOK BACK A BIT';
           else if (Math.abs(yaw) >= 20) angleMessage = 'FACE THE CAMERA MORE';
           else angleMessage = 'HOLD STILL...';
         }
@@ -435,207 +450,204 @@ export default function HomeScreen() {
 
   // ─── BORDER COLOR ─────────────────────────────────────────────────────────
   const borderColor =
-    uiProgress > 0 ? '#34C759' :  // GREEN  — countdown running
-      trafficColor === 'green' ? '#34C759' :
+    uiProgress > 0 ? '#1B6E4B' :  // GREEN  — countdown running
+      trafficColor === 'green' ? '#1B6E4B' :
         trafficColor === 'orange' ? '#FF8800' :
           '#FF3B30';  // RED
 
   // ─── UI ───────────────────────────────────────────────────────────────────
-  const renderMainMenu = () => (
-    <View style={styles.menuContainer}>
-      <View style={styles.logoCircle}><Text style={styles.logoText}>👤</Text></View>
-      <Text style={styles.title}>AI KIOSK</Text>
-      <Text style={styles.subtitle}>Biometric Security System</Text>
-
-      {view === 'authenticating' && isProcessing && (
-        <View style={styles.processingStatus}>
-          <ActivityIndicator color="#007AFF" />
-          <Text style={styles.processingText}>Verifying Identity...</Text>
-        </View>
-      )}
-
-      <View style={styles.buttonGroup}>
-        <TouchableOpacity
-          style={[styles.bigButton, { backgroundColor: '#007AFF', opacity: isProcessing ? 0.5 : 1 }]}
-          disabled={isProcessing}
-          onPress={() => {
-            setView('authenticating');
-            setIsCameraOpen(true);
-            setCanCapture(false);
-            setAuthStatus("");
-            setTimeout(() => setCanCapture(true), 1500);
-          }}
-        >
-          <Text style={styles.bigButtonText}>AUTHENTICATE</Text>
-          <Text style={styles.buttonDesc}>Scan to verify identity</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.bigButton, { backgroundColor: '#34C759' }]}
-          onPress={() => { setView('enrolling'); setIsCameraOpen(false); setAuthStatus(""); }}
-        >
-          <Text style={styles.bigButtonText}>ENROLL EMPLOYEE</Text>
-          <Text style={styles.buttonDesc}>Register new face</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  const renderEnrollForm = () => (
-    <View style={styles.formContainer}>
-      <Text style={styles.formTitle}>New Enrollment</Text>
-      <View style={styles.inputWrapper}>
-        <Text style={styles.inputLabel}>FULL NAME</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Daniyal Khan"
-          placeholderTextColor="#555"
-          value={employeeName}
-          onChangeText={setEmployeeName}
-          autoFocus={true}
-          editable={!isProcessing}
-        />
-      </View>
-
-      {isProcessing && (
-        <View style={styles.processingStatus}>
-          <ActivityIndicator color="#007AFF" />
-          <Text style={styles.processingText}>Processing Face...</Text>
-        </View>
-      )}
-
-      {authStatus && !isCameraOpen && (
-        <Text style={[styles.inlineStatus, { color: authStatus.includes("✅") ? "#34C759" : "#FF3B30" }]}>
-          {authStatus}
-        </Text>
-      )}
-
-      <TouchableOpacity
-        style={[styles.bigButton, {
-          backgroundColor: '#007AFF',
-          opacity: (employeeName && !isProcessing) ? 1 : 0.5,
-          marginTop: 20,
-        }]}
-        disabled={!employeeName || isProcessing}
-        onPress={() => {
-          setIsCameraOpen(true);
-          setAuthStatus("");
-          setEnrollStep('front');
-          setEnrollImages([]);
-          lastPoseValid.value = Date.now();
-          poseProgress.value = 0;
-          setUiProgress(0);
-          setCanCapture(false);
-          setTimeout(() => setCanCapture(true), 2000);
-        }}
-      >
-        <Text style={styles.bigButtonText}>{isProcessing ? "PROCESSING..." : "START SCAN"}</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        onPress={() => { setView('menu'); setEmployeeName(""); setAuthStatus(""); }}
-        disabled={isProcessing}
-      >
-        <Text style={styles.backLink}>CANCEL</Text>
-      </TouchableOpacity>
-    </View>
-  );
 
   if (!hasPermission) return <View style={styles.container}><Text style={styles.text}>No Permission</Text></View>;
   if (!device) return <View style={styles.container}><Text style={styles.text}>No Camera</Text></View>;
 
+  const isWhiteTheme = view === 'menu' || (view === 'enrolling' && !isCameraOpen) || (view === 'authenticating' && !isCameraOpen);
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
-      {view === 'menu' && renderMainMenu()}
-      {view === 'authenticating' && !isCameraOpen && renderMainMenu()}
-      {view === 'enrolling' && !isCameraOpen && renderEnrollForm()}
-
-      {isCameraOpen && view !== 'menu' && (
-        <>
-          <Camera
-            ref={camera}
-            device={device}
-            isActive={true}
-            style={StyleSheet.absoluteFill}
-            frameProcessor={frameProcessor}
-          />
-
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => {
-              setView('menu'); setAuthStatus(""); setIsProcessing(false);
-              setIsCameraOpen(false); setEnrollStep('idle');
+    <>
+      <StatusBar style={isWhiteTheme ? "dark" : "light"} backgroundColor={isWhiteTheme ? '#FFFFFF' : '#0A0A0A'} />
+      <KeyboardAvoidingView behavior="padding" style={[styles.container, { backgroundColor: isWhiteTheme ? '#FFFFFF' : '#0A0A0A' }]}>
+        {view === 'menu' && (
+          <MainMenu
+            isProcessing={isProcessing}
+            onAuthenticatePress={() => {
+              setView('authenticating');
+              setIsCameraOpen(true);
+              setCanCapture(false);
+              setAuthStatus("");
+              setTimeout(() => setCanCapture(true), 1500);
             }}
-          >
-            <Text style={styles.closeText}>✕</Text>
-          </TouchableOpacity>
+            onEnrollPress={() => {
+              setView('enrolling');
+              setIsCameraOpen(false);
+              setAuthStatus("");
+            }}
+          />
+        )}
+        {view === 'authenticating' && !isCameraOpen && (
+          <MainMenu
+            isProcessing={isProcessing}
+            onAuthenticatePress={() => { }}
+            onEnrollPress={() => { }}
+          />
+        )}
+        {view === 'enrolling' && !isCameraOpen && (
+          <EnrollForm
+            employeeName={employeeName}
+            setEmployeeName={setEmployeeName}
+            isProcessing={isProcessing}
+            authStatus={authStatus}
+            onStartScan={() => {
+              setIsCameraOpen(true);
+              setAuthStatus("");
+              setEnrollStep('front');
+              setEnrollImages([]);
+              lastPoseValid.value = Date.now();
+              poseProgress.value = 0;
+              setUiProgress(0);
+              setCanCapture(false);
+              setTimeout(() => setCanCapture(true), 2000);
+            }}
+            onCancel={() => {
+              setView('menu');
+              setEmployeeName("");
+              setAuthStatus("");
+            }}
+          />
+        )}
 
-          {/* ── TARGET BOX — border driven by unified traffic state ─────── */}
-          <View style={[styles.targetBox, { borderColor }]}>
-            {uiProgress > 0 && (
-              <View style={[styles.progressBar, { width: `${uiProgress * 100}%` }]} />
-            )}
+        {isCameraOpen && view !== 'menu' && (
+          <View style={styles.cameraScreenContainer}>
+            {/* ── HEADER ────────────────────────────────────────────────────── */}
+            <View style={styles.header}>
+              <View style={styles.headerTextContainer}>
+                <Text style={styles.headerTitle}>
+                  {view === 'enrolling' ? 'Face Enrollment' : 'Face Authentication'}
+                </Text>
+                <Text style={styles.headerSubtitle}>
+                  {view === 'enrolling'
+                    ? 'Please follow the guidelines to capture your face from all angles'
+                    : 'Please position your face within the circle to verify your identity'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.closeIconBtn}
+                onPress={() => {
+                  setView('menu'); setAuthStatus(""); setIsProcessing(false);
+                  setIsCameraOpen(false); setEnrollStep('idle');
+                }}
+              >
+                <Text style={styles.closeIconText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* ── CAMERA & CIRCULAR MASK ────────────────────────────────────── */}
+            <View style={styles.cameraWrapper}>
+              <Camera
+                ref={camera}
+                device={device}
+                isActive={true}
+                style={StyleSheet.absoluteFill}
+                frameProcessor={frameProcessor}
+              />
+
+              <Svg height={SCREEN_HEIGHT} width={SCREEN_WIDTH} style={StyleSheet.absoluteFill}>
+                <Defs>
+                  <Mask id="mask" x="0" y="0" height={SCREEN_HEIGHT} width={SCREEN_WIDTH}>
+                    <Rect height={SCREEN_HEIGHT} width={SCREEN_WIDTH} fill="#fff" />
+                    <Ellipse
+                      rx={OVAL_RX}
+                      ry={OVAL_RY}
+                      cx={OVAL_CX}
+                      cy={OVAL_CY}
+                      fill="black"
+                    />
+                  </Mask>
+                </Defs>
+                {/* White background over everything except the circle */}
+                <Rect height={SCREEN_HEIGHT} width={SCREEN_WIDTH} fill="#FAFAFA" mask="url(#mask)" />
+
+                {/* Circular Progress & Traffic Light */}
+                <Ellipse
+                  rx={OVAL_RY} // Swapped for the rotation fix
+                  ry={OVAL_RX} // Swapped for the rotation fix
+                  cx={OVAL_CX}
+                  cy={OVAL_CY}
+                  fill="transparent"
+                  stroke={trafficColor === 'green' ? '#1B6E4B' : trafficColor === 'orange' ? '#FF8800' : '#FF3B30'}
+                  strokeWidth={8}
+                  strokeDasharray={OVAL_PERIMETER}
+                  strokeDashoffset={OVAL_PERIMETER * (1 - uiProgress)}
+                  strokeLinecap="round"
+                  rotation="-90"
+                  originX={OVAL_CX}
+                  originY={OVAL_CY}
+                />
+              </Svg>
+            </View>
+
+            {/* ── GUIDELINES CARD ───────────────────────────────────────────── */}
+            <View style={styles.guidelinesCard}>
+              <Text style={styles.guidelinesTitle}>Guidelines</Text>
+
+              <View style={styles.guidelineItem}>
+                <View style={[styles.guidelineDot, { backgroundColor: trafficColor === 'green' ? '#1B6E4B' : trafficColor === 'orange' ? '#FF8800' : '#FF3B30' }]} />
+                <Text style={[
+                  styles.guidelineText,
+                  { color: trafficColor === 'green' ? '#1B6E4B' : trafficColor === 'orange' ? '#FF8800' : '#333' }
+                ]}>
+                  {authStatus || (!canCapture ? "Readying camera..." : trafficMessage)}
+                </Text>
+              </View>
+
+              {isProcessing && (
+                <View style={styles.processingStatus}>
+                  <ActivityIndicator color="#1B6E4B" />
+                  <Text style={styles.processingText}>Processing...</Text>
+                </View>
+              )}
+            </View>
           </View>
+        )}
 
-          {/* ── STATUS OVERLAY ────────────────────────────────────────────── */}
-          <View style={styles.uiOverlay}>
-            <Text style={styles.phaseLabel}>
-              {view === 'enrolling' ? phaseMessages[enrollStep] : 'AUTHENTICATING'}
-            </Text>
-            {isProcessing && <ActivityIndicator color="#007AFF" style={{ marginBottom: 10 }} />}
-            <Text style={[
-              styles.statusText,
-              {
-                color: authStatus.includes("✅") ? "#00FF00"
-                  : trafficColor === 'green' ? "#34C759"
-                    : trafficColor === 'orange' ? "#FF8800"
-                      : "white"
-              }
-            ]}>
-              {authStatus || (!canCapture ? "READYING CAMERA..." : trafficMessage)}
-            </Text>
+        {showSnackbar && (
+          <View style={[styles.snackbar, { backgroundColor: snackbarType === 'success' ? '#1B6E4B' : '#FF3B30' }]}>
+            <Text style={styles.snackbarText}>{authStatus}</Text>
           </View>
-        </>
-      )}
-
-      {showSnackbar && (
-        <View style={[styles.snackbar, { backgroundColor: snackbarType === 'success' ? '#34C759' : '#FF3B30' }]}>
-          <Text style={styles.snackbarText}>{authStatus}</Text>
-        </View>
-      )}
-    </KeyboardAvoidingView>
+        )}
+      </KeyboardAvoidingView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0A0A0A" },
-  menuContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  logoCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  logoText: { fontSize: 50 },
-  title: { fontSize: 36, fontWeight: '900', color: 'white', letterSpacing: 4 },
-  subtitle: { fontSize: 14, color: '#666', marginTop: 5, letterSpacing: 2, marginBottom: 60, textTransform: 'uppercase' },
-  buttonGroup: { width: '100%', gap: 20 },
-  bigButton: { width: '100%', paddingVertical: 25, borderRadius: 20, alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
-  bigButtonText: { color: 'white', fontSize: 20, fontWeight: '800', letterSpacing: 1 },
-  buttonDesc: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 4 },
-  formContainer: { flex: 1, justifyContent: 'center', padding: 40 },
-  formTitle: { fontSize: 28, fontWeight: 'bold', color: 'white', marginBottom: 40, textAlign: 'center' },
-  inputWrapper: { marginBottom: 20 },
-  inputLabel: { color: '#007AFF', fontSize: 12, fontWeight: 'bold', marginBottom: 8, marginLeft: 5 },
-  input: { backgroundColor: '#1A1A1A', borderRadius: 15, padding: 20, color: 'white', fontSize: 20, borderWidth: 1, borderColor: '#333' },
-  backLink: { color: '#666', textAlign: 'center', marginTop: 30, fontSize: 14, fontWeight: '600' },
   uiOverlay: { position: "absolute", bottom: 80, backgroundColor: "rgba(0,0,0,0.95)", paddingVertical: 25, paddingHorizontal: 40, borderRadius: 40, alignSelf: "center", alignItems: "center", minWidth: SCREEN_WIDTH * 0.8, borderWidth: 1, borderColor: '#333' },
   statusText: { color: "white", fontSize: 22, fontWeight: '900', textAlign: "center", letterSpacing: 1 },
   closeButton: { position: 'absolute', top: 60, right: 30, width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', zIndex: 100, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   closeText: { color: 'white', fontSize: 28, fontWeight: '300' },
   text: { color: 'white', fontSize: 18, textAlign: 'center' },
   processingStatus: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 20, gap: 10 },
-  processingText: { color: '#007AFF', fontSize: 16, fontWeight: '600' },
+  processingText: { color: '#1B6E4B', fontSize: 16, fontWeight: '600' },
   inlineStatus: { textAlign: 'center', fontSize: 18, fontWeight: 'bold', marginBottom: 20 },
-  snackbar: { position: 'absolute', bottom: 40, left: 20, right: 20, padding: 20, borderRadius: 15, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
+  snackbar: { position: 'absolute', top: 70, left: 20, right: 20, padding: 20, borderRadius: 15, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10, zIndex: 1000 },
   snackbarText: { color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   targetBox: { position: 'absolute', left: TARGET_BOX_X, top: TARGET_BOX_Y, width: TARGET_BOX_SIZE, height: TARGET_BOX_SIZE, borderWidth: 2, borderRadius: 30, backgroundColor: 'rgba(0,0,0,0.1)', justifyContent: 'flex-end' },
-  progressBar: { position: 'absolute', bottom: -25, height: 8, backgroundColor: '#34C759', borderRadius: 4 },
+  progressBar: { position: 'absolute', bottom: -25, height: 8, backgroundColor: '#1B6E4B', borderRadius: 4 },
   phaseLabel: { color: '#007AFF', fontWeight: 'bold', fontSize: 14, marginBottom: 5, letterSpacing: 2 },
   faceBox: { position: "absolute", borderWidth: 3, borderRadius: 20, borderStyle: "dashed" },
+
+  // ── NEW UI DESIGN STYLES ──────────────────────────────────────────────
+  cameraScreenContainer: { flex: 1, backgroundColor: '#FAFAFA' },
+  header: { paddingTop: 60, paddingHorizontal: 30, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', zIndex: 10 },
+  headerTextContainer: { flex: 1, paddingRight: 20 },
+  headerTitle: { fontSize: 32, fontWeight: '900', color: '#1B6E4B', letterSpacing: 0.5 },
+  headerSubtitle: { fontSize: 15, color: '#555', marginTop: 10, lineHeight: 22 },
+  closeIconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E5E5E5', justifyContent: 'center', alignItems: 'center' },
+  closeIconText: { fontSize: 20, color: '#333', fontWeight: 'bold' },
+  cameraWrapper: { ...StyleSheet.absoluteFillObject, zIndex: 1 },
+  // Card positioned using 'top' instead of 'bottom' to prevent the keyboard from squishing it upwards
+  guidelinesCard: { position: 'absolute', top: (SCREEN_HEIGHT / 2) + 180, left: 25, right: 25, backgroundColor: 'white', borderRadius: 24, padding: 30, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.085, shadowRadius: 20, elevation: 1, zIndex: 10 },
+  guidelinesTitle: { fontSize: 22, fontWeight: '800', color: '#111', marginBottom: 25 },
+  guidelineItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  guidelineDot: { width: 10, height: 10, borderRadius: 5, marginRight: 15 },
+  guidelineText: { fontSize: 17, fontWeight: '600', flex: 1, textTransform: 'uppercase', letterSpacing: 1 },
 });
